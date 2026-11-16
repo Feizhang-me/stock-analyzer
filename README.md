@@ -66,7 +66,9 @@ Python 3.10+ · pandas · NumPy · Tushare Pro · Plotly · SQLite · pytest
 python -m pip install -r requirements.txt
 
 # 2. 配置 Tushare token（不要把 token 写进代码或提交到仓库）
-$env:TUSHARE_TOKEN="你的 token"
+Copy-Item .env.example .env
+# 编辑 .env，把 TUSHARE_TOKEN 改成你自己的 token
+# 也可以临时用环境变量：$env:TUSHARE_TOKEN="你的 token"
 
 # 3. 不联网先跑一遍完整流程（合成数据）
 python main.py demo

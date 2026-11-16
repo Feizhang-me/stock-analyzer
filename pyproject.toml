@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "stock-analyzer"
+version = "0.1.0"
+description = "基于 Tushare 的 A 股行情分析、批量筛选与策略回测工具"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "pandas>=2.0",
+    "numpy>=1.24",
+    "plotly>=5.18",
+    "tushare>=1.2",
+    "six>=1.16",
+]
+
+[project.scripts]
+stock-analyzer = "stock_analyzer.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]

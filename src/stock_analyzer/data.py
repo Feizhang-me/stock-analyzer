@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import sqlite3
 import time
 from datetime import date, datetime, timedelta
@@ -29,6 +30,26 @@ STOCK_BASIC_FIELDS = "ts_code,symbol,name,area,industry,market,list_date"
 
 class DataSourceError(RuntimeError):
     """数据源不可用或返回异常。"""
+
+
+TUSHARE_HOSTS = ("api.tushare.pro", "api.waditu.com")
+
+
+def _bypass_system_proxy_for_tushare() -> None:
+    """让 Tushare 直连，避免系统代理返回 502 时被误判成“没有数据”。
+
+    Windows 上 requests 会读取 IE/系统代理（如 Clash 的 127.0.0.1:7897）。
+    代理一旦拦截 api.tushare.pro，tushare 客户端只会返回空表而不报错，
+    这里把 Tushare 的主机名追加进 no_proxy，保持其它请求不动。
+    """
+    raw = os.environ.get("NO_PROXY") or os.environ.get("no_proxy") or ""
+    hosts = [part.strip() for part in raw.split(",") if part.strip()]
+    missing = [host for host in TUSHARE_HOSTS if host not in hosts]
+    if not missing:
+        return
+    merged = ",".join(hosts + missing)
+    os.environ["NO_PROXY"] = merged
+    os.environ["no_proxy"] = merged
 
 
 def _fmt_date(value: str | date | datetime) -> str:
@@ -58,6 +79,7 @@ class TushareDataSource:
     ) -> None:
         if not token:
             raise DataSourceError("缺少 Tushare token，请设置环境变量 TUSHARE_TOKEN")
+        _bypass_system_proxy_for_tushare()
         try:
             import tushare as ts
         except ImportError as exc:  # pragma: no cover - 依赖缺失时给出明确提示
@@ -223,6 +245,7 @@ class TushareDataSource:
             if end > max_cached:
                 windows.append((_shift_day(max_cached, 1), end))
 
+        errors: list[str] = []
         for win_start, win_end in windows:
             if win_start > win_end:
                 continue
@@ -234,8 +257,11 @@ class TushareDataSource:
                     end_date=win_end,
                     fields=DAILY_API_FIELDS,
                 )
-            except DataSourceError:
-                logger.warning("增量拉取失败，尝试使用已有缓存: %s %s-%s", ts_code, win_start, win_end)
+            except DataSourceError as exc:
+                # 接口报错（例如积分不足、代理异常）时先记录下来，
+                # 若有本地缓存仍可继续；否则下面会带着真实原因报错。
+                errors.append(str(exc))
+                logger.warning("拉取 %s %s-%s 失败: %s", ts_code, win_start, win_end, exc)
                 continue
             if df.empty:
                 continue
@@ -265,7 +291,23 @@ class TushareDataSource:
                 conn,
                 params=(ts_code, start, end),
             )
-        return self._normalize_daily(df, already_sorted=True)
+        result = self._normalize_daily(df, already_sorted=True)
+        if result.empty and errors:
+            hint = ""
+            if any("权限" in message or "40203" in message for message in errors):
+                hint = (
+                    "\n提示：Tushare 返回 40203 表示当前账号积分不足。"
+                    "daily 需要 120 积分起，index_daily 需要 2000 积分起，"
+                    "请登录 https://tushare.pro 查看积分与接口权限。"
+                )
+            elif any("token" in message or "40101" in message for message in errors):
+                hint = (
+                    "\n提示：Tushare 返回 40101 表示这个 token 已失效（或填错了）。"
+                    "请登录 https://tushare.pro 个人中心重新复制“接口TOKEN”，"
+                    "更新 .env 里的 TUSHARE_TOKEN 后再运行。"
+                )
+            raise DataSourceError(f"获取 {ts_code} 行情失败：{errors[0]}{hint}")
+        return result
 
     @staticmethod
     def _normalize_daily(df: pd.DataFrame, already_sorted: bool = False) -> pd.DataFrame:
